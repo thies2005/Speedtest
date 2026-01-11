@@ -29,29 +29,7 @@ duration_min = 1
 freq_sec = 10
 if test_mode == "Continuous":
     duration_min = st.sidebar.slider("Duration (min)", 1, 60, 1)
-    freq_sec = st.sidebar.slider("Frequency (sec)", 10, 120, 10)
-
-def create_chart(df, column, color):
-    fig = go.Figure()
-    if not df.empty:
-        fig.add_trace(go.Scatter(
-            x=df['Timestamp'], y=df[column],
-            mode='lines+markers',
-            line=dict(color=color, width=3),
-            marker=dict(size=8),
-            fill='tozeroy',
-            fillcolor=f'rgba{tuple(list(int(color.lstrip("#")[i:i+2], 16) for i in (0, 2, 4)) + [0.15])}'
-        ))
-    fig.update_layout(
-        title=dict(text=column, font=dict(color='white', size=16)),
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(0,0,0,0)',
-        xaxis=dict(showgrid=False, color='#666'),
-        yaxis=dict(showgrid=True, gridcolor='rgba(255,255,255,0.1)', color='#666'),
-        margin=dict(l=10, r=10, t=40, b=10),
-        height=280
-    )
-    return fig
+    freq_sec = st.sidebar.slider("Frequency (sec)", 2, 120, 10, step=1)  # Min 2 seconds
 
 # Main UI
 st.title("🚀 Device Speed Monitor")
@@ -61,6 +39,8 @@ st.caption("Measures your **browser/device** connection using Cloudflare.")
 is_continuous = "true" if test_mode == "Continuous" else "false"
 
 speedtest_html = f"""
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
 <div id="speedtest-container" style="padding: 20px; background: linear-gradient(135deg, #1a1a2e, #16213e); border-radius: 15px; margin-bottom: 20px;">
     <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 20px;">
         <button id="startBtn" onclick="startTest()" style="background: linear-gradient(135deg, #00ffcc, #00bfff); color: #000; border: none; padding: 15px 40px; border-radius: 10px; font-size: 18px; font-weight: bold; cursor: pointer;">
@@ -77,6 +57,8 @@ speedtest_html = f"""
         </div>
         <div id="progressText" style="color: #888; font-size: 12px; margin-top: 5px;"></div>
     </div>
+    
+    <!-- Results -->
     <div id="results" style="display: none; margin-top: 30px;">
         <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px;">
             <div style="background: rgba(0,191,255,0.1); padding: 20px; border-radius: 10px; text-align: center; border-left: 4px solid #00bfff;">
@@ -101,6 +83,17 @@ speedtest_html = f"""
             </div>
         </div>
     </div>
+    
+    <!-- Graph Section -->
+    <div id="chartSection" style="display: none; margin-top: 30px; background: rgba(0,0,0,0.2); border-radius: 15px; padding: 20px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+            <div style="color: #fff; font-size: 16px; font-weight: bold;">📈 Performance Graph</div>
+            <div id="legendContainer" style="display: flex; gap: 15px; flex-wrap: wrap;"></div>
+        </div>
+        <canvas id="performanceChart" height="200"></canvas>
+    </div>
+    
+    <!-- History -->
     <div id="historySection" style="margin-top: 20px;">
         <div style="color: #888; font-size: 14px; margin-bottom: 10px;">📊 Test History (<span id="testCount">0</span> tests)</div>
         <div id="historyList" style="max-height: 200px; overflow-y: auto; background: rgba(0,0,0,0.2); border-radius: 10px; padding: 10px;"></div>
@@ -114,8 +107,100 @@ const FREQUENCY_MS = {freq_sec * 1000};
 
 let isRunning = false;
 let testInterval = null;
+let progressInterval = null;
 let startTime = null;
 let testHistory = [];
+let chart = null;
+
+// Metric visibility state
+let visibleMetrics = {{
+    ping: true,
+    jitter: true,
+    download: true,
+    upload: true
+}};
+
+const metricColors = {{
+    ping: '#00bfff',
+    jitter: '#ff7f50',
+    download: '#00ffcc',
+    upload: '#ff69b4'
+}};
+
+function initChart() {{
+    const ctx = document.getElementById('performanceChart').getContext('2d');
+    chart = new Chart(ctx, {{
+        type: 'line',
+        data: {{
+            labels: [],
+            datasets: [
+                {{ label: 'Ping (ms)', data: [], borderColor: metricColors.ping, backgroundColor: 'transparent', tension: 0.3, hidden: !visibleMetrics.ping }},
+                {{ label: 'Jitter (ms)', data: [], borderColor: metricColors.jitter, backgroundColor: 'transparent', tension: 0.3, hidden: !visibleMetrics.jitter }},
+                {{ label: 'Download (Mbps)', data: [], borderColor: metricColors.download, backgroundColor: 'transparent', tension: 0.3, hidden: !visibleMetrics.download }},
+                {{ label: 'Upload (Mbps)', data: [], borderColor: metricColors.upload, backgroundColor: 'transparent', tension: 0.3, hidden: !visibleMetrics.upload }}
+            ]
+        }},
+        options: {{
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: {{ mode: 'index', intersect: false }},
+            plugins: {{
+                legend: {{ display: false }}
+            }},
+            scales: {{
+                x: {{ grid: {{ color: 'rgba(255,255,255,0.1)' }}, ticks: {{ color: '#888' }} }},
+                y: {{ grid: {{ color: 'rgba(255,255,255,0.1)' }}, ticks: {{ color: '#888' }} }}
+            }}
+        }}
+    }});
+    
+    // Create custom legend
+    updateLegend();
+}}
+
+function updateLegend() {{
+    const container = document.getElementById('legendContainer');
+    container.innerHTML = '';
+    
+    const metrics = ['ping', 'jitter', 'download', 'upload'];
+    const labels = ['Ping', 'Jitter', 'Download', 'Upload'];
+    
+    metrics.forEach((metric, i) => {{
+        const btn = document.createElement('button');
+        btn.style.cssText = `
+            background: ${{visibleMetrics[metric] ? metricColors[metric] : 'transparent'}};
+            color: ${{visibleMetrics[metric] ? '#000' : metricColors[metric]}};
+            border: 2px solid ${{metricColors[metric]}};
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.2s;
+        `;
+        btn.textContent = labels[i];
+        btn.onclick = () => toggleMetric(metric, i);
+        container.appendChild(btn);
+    }});
+}}
+
+function toggleMetric(metric, datasetIndex) {{
+    visibleMetrics[metric] = !visibleMetrics[metric];
+    chart.data.datasets[datasetIndex].hidden = !visibleMetrics[metric];
+    chart.update();
+    updateLegend();
+}}
+
+function updateChart() {{
+    if (!chart) return;
+    
+    chart.data.labels = testHistory.map(t => t.time);
+    chart.data.datasets[0].data = testHistory.map(t => parseFloat(t.ping));
+    chart.data.datasets[1].data = testHistory.map(t => parseFloat(t.jitter));
+    chart.data.datasets[2].data = testHistory.map(t => parseFloat(t.dl));
+    chart.data.datasets[3].data = testHistory.map(t => parseFloat(t.ul));
+    chart.update();
+}}
 
 async function runSingleTest() {{
     const status = document.getElementById('status');
@@ -154,11 +239,13 @@ async function runSingleTest() {{
         document.getElementById('download').textContent = dlMbps.toFixed(1);
         document.getElementById('upload').textContent = ulMbps.toFixed(1);
         document.getElementById('results').style.display = 'block';
+        document.getElementById('chartSection').style.display = 'block';
         
         // Add to history
         const now = new Date().toLocaleTimeString();
         testHistory.push({{ time: now, ping: ping.toFixed(1), jitter: jitter.toFixed(1), dl: dlMbps.toFixed(1), ul: ulMbps.toFixed(1) }});
         updateHistoryDisplay();
+        updateChart();
         
         return true;
     }} catch(e) {{
@@ -199,6 +286,9 @@ async function startTest() {{
     isRunning = true;
     startTime = Date.now();
     
+    // Initialize chart if needed
+    if (!chart) initChart();
+    
     document.getElementById('startBtn').style.display = 'none';
     document.getElementById('stopBtn').style.display = 'inline-block';
     document.getElementById('progressContainer').style.display = CONTINUOUS ? 'block' : 'none';
@@ -227,7 +317,7 @@ async function startTest() {{
         }}, FREQUENCY_MS);
         
         // Update progress bar every second
-        setInterval(updateProgress, 1000);
+        progressInterval = setInterval(updateProgress, 1000);
     }} else {{
         stopTest();
     }}
@@ -239,6 +329,10 @@ function stopTest() {{
         clearInterval(testInterval);
         testInterval = null;
     }}
+    if (progressInterval) {{
+        clearInterval(progressInterval);
+        progressInterval = null;
+    }}
     document.getElementById('startBtn').style.display = 'inline-block';
     document.getElementById('stopBtn').style.display = 'none';
     document.getElementById('progressContainer').style.display = 'none';
@@ -247,37 +341,40 @@ function stopTest() {{
     }}
 }}
 
-// Load any previous history from localStorage
+// Initialize on load
 window.onload = function() {{
     const saved = localStorage.getItem('speedtest_history');
     if (saved) {{
         try {{
             testHistory = JSON.parse(saved);
-            updateHistoryDisplay();
             if (testHistory.length > 0) {{
+                initChart();
+                updateHistoryDisplay();
+                updateChart();
                 const last = testHistory[testHistory.length - 1];
                 document.getElementById('ping').textContent = last.ping;
                 document.getElementById('jitter').textContent = last.jitter;
                 document.getElementById('download').textContent = last.dl;
                 document.getElementById('upload').textContent = last.ul;
                 document.getElementById('results').style.display = 'block';
-                document.getElementById('status').textContent = '📊 Showing last test results.';
+                document.getElementById('chartSection').style.display = 'block';
+                document.getElementById('status').textContent = '📊 Showing previous results.';
             }}
         }} catch(e) {{}}
     }}
 }};
 
-// Save history when tests run
+// Save history periodically
 setInterval(() => {{
     if (testHistory.length > 0) {{
-        localStorage.setItem('speedtest_history', JSON.stringify(testHistory.slice(-50)));
+        localStorage.setItem('speedtest_history', JSON.stringify(testHistory.slice(-100)));
     }}
 }}, 5000);
 </script>
 """
 
 # Render the speedtest component
-st.components.v1.html(speedtest_html, height=550)
+st.components.v1.html(speedtest_html, height=750)
 
 st.sidebar.divider()
 if test_mode == "Continuous":
