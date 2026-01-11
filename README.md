@@ -1,8 +1,8 @@
 # 🚀 Speedtest - Streamlit App
 
 A premium network speed test application built with Streamlit and Chart.js. It measures Ping, Jitter, Download, and Upload speeds of your current device with high-frequency monitoring and live visualization.
+<img width="1917" height="1198" alt="image" src="https://github.com/user-attachments/assets/ded93aa7-545b-42db-9963-3fc85c5ed207" />
 
-![Sample Screenshot](![Uploading image.png…]()
 
 ## Features
 - **Client-Side Testing**: Measures the speed of the user's phone or laptop, not the server.
