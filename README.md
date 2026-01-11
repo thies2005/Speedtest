@@ -2,7 +2,7 @@
 
 A premium network speed test application built with Streamlit and Chart.js. It measures Ping, Jitter, Download, and Upload speeds of your current device with high-frequency monitoring and live visualization.
 
-![Sample Screenshot](https://raw.githubusercontent.com/streamlit/docs/main/public/images/streamlit-logo-secondary-colormark-darktext.png)
+![Sample Screenshot](![Uploading image.png…]()
 
 ## Features
 - **Client-Side Testing**: Measures the speed of the user's phone or laptop, not the server.
