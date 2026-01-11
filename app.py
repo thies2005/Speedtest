@@ -1,14 +1,14 @@
 import streamlit as st
-import speedtest
-import time
 import pandas as pd
 import plotly.graph_objects as go
 import numpy as np
-from datetime import datetime
+import time
+from datetime import datetime, timedelta
+from streamlit_javascript import st_javascript
 
 # Set page config
 st.set_page_config(
-    page_title="Consistent Speedtest",
+    page_title="Consistent Speedtest (Client-Side)",
     page_icon="🚀",
     layout="wide"
 )
@@ -16,159 +16,177 @@ st.set_page_config(
 # Custom CSS for premium look
 st.markdown("""
     <style>
-    .main {
-        background: linear-gradient(135deg, #1e1e2f 0%, #121212 100%);
-        color: #ffffff;
-    }
+    .main { background-color: #0e1117; color: #ffffff; }
     .stMetric {
         background: rgba(255, 255, 255, 0.05);
-        padding: 20px;
-        border-radius: 15px;
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        transition: transform 0.3s ease;
-    }
-    .stMetric:hover {
-        transform: translateY(-5px);
-        border-color: #00ffcc;
+        padding: 15px;
+        border-radius: 10px;
+        border-left: 5px solid #00ffcc;
     }
     </style>
 """, unsafe_allow_html=True)
 
-# Initialize session state for history
+# Initialize Session State
 if 'history' not in st.session_state:
     st.session_state.history = pd.DataFrame(columns=['Timestamp', 'Ping (ms)', 'Jitter (ms)', 'Download (Mbps)', 'Upload (Mbps)'])
+if 'running' not in st.session_state:
+    st.session_state.running = False
+if 'start_time' not in st.session_state:
+    st.session_state.start_time = None
 
-def get_jitter(st_client, server, count=5):
-    """Calculate jitter by performing multiple pings."""
-    latencies = []
-    for _ in range(count):
-        try:
-            # Re-measuring latency to the same server
-            st_client.get_servers([server['id']])
-            latencies.append(st_client.results.ping)
-            time.sleep(0.1)
-        except:
-            continue
-    
-    if len(latencies) < 2:
-        return 0
-    
-    deltas = [abs(latencies[i] - latencies[i-1]) for i in range(1, len(latencies))]
-    return np.mean(deltas)
+# Sidebar Controls
+st.sidebar.title("⚙️ Test Settings")
+test_mode = st.sidebar.radio("Test Mode", ["Single Speed Test", "Continuous Monitoring"])
 
-def run_speedtest():
-    status_text = st.empty()
-    progress_bar = st.progress(0)
-    
-    try:
-        status_text.text("Connecting to best server...")
-        s = speedtest.Speedtest()
-        s.get_best_server()
-        progress_bar.progress(20)
-        
-        status_text.text("Measuring Ping & Jitter...")
-        best_server = s.best
-        ping = best_server['latency']
-        jitter = get_jitter(s, best_server)
-        progress_bar.progress(40)
-        
-        status_text.text("Testing Download Speed...")
-        download_speed = s.download() / 1_000_000  # Convert to Mbps
-        progress_bar.progress(70)
-        
-        status_text.text("Testing Upload Speed...")
-        upload_speed = s.upload() / 1_000_000  # Convert to Mbps
-        progress_bar.progress(100)
-        
-        status_text.text("Test Complete!")
-        
-        result = {
-            'Timestamp': datetime.now().strftime("%H:%M:%S"),
-            'Ping (ms)': round(ping, 2),
-            'Jitter (ms)': round(jitter, 2),
-            'Download (Mbps)': round(download_speed, 2),
-            'Upload (Mbps)': round(upload_speed, 2)
-        }
-        
-        st.session_state.history = pd.concat([st.session_state.history, pd.DataFrame([result])], ignore_index=True)
-        time.sleep(1)
-        status_text.empty()
-        progress_bar.empty()
-        
-    except Exception as e:
-        st.error(f"An error occurred: {e}")
-        progress_bar.empty()
-        status_text.empty()
+duration_min = 1
+if test_mode == "Continuous Monitoring":
+    duration_min = st.sidebar.slider("Total Duration (minutes)", 1, 60, 5)
+    frequency_sec = st.sidebar.slider("Frequency (seconds)", 10, 300, 30)
+else:
+    frequency_sec = 0
+
+# JavaScript Speedtest Logic
+JS_CODE = """
+async function runTest() {
+    const endpoints = {
+        ping: "https://speed.cloudflare.com/__down?bytes=0",
+        download: "https://speed.cloudflare.com/__down?bytes=2000000",
+        upload: "https://speed.cloudflare.com/__up"
+    };
+
+    async function measurePing() {
+        const start = performance.now();
+        await fetch(endpoints.ping, { cache: 'no-store' });
+        return performance.now() - start;
+    }
+
+    // 1. Measure Ping & Jitter
+    const pings = [];
+    for(let i=0; i<5; i++) {
+        pings.push(await measurePing());
+    }
+    const ping = Math.min(...pings);
+    const deltas = pings.slice(1).map((v, i) => Math.abs(v - pings[i]));
+    const jitter = deltas.reduce((a, b) => a + b, 0) / deltas.length;
+
+    // 2. Measure Download
+    const dlStart = performance.now();
+    const dlRes = await fetch(endpoints.download, { cache: 'no-store' });
+    const dlBlob = await dlRes.blob();
+    const dlEnd = performance.now();
+    const dlMbps = (dlBlob.size * 8) / ((dlEnd - dlStart) / 1000) / 1_000_000;
+
+    // 3. Measure Upload
+    const ulData = new Uint8Array(1000000); // 1MB for upload test
+    const ulStart = performance.now();
+    await fetch(endpoints.upload, {
+        method: 'POST',
+        body: ulData
+    });
+    const ulEnd = performance.now();
+    const ulMbps = (ulData.length * 8) / ((ulEnd - ulStart) / 1000) / 1_000_000;
+
+    return {
+        ping: ping.toFixed(2),
+        jitter: jitter.toFixed(2),
+        download: dlMbps.toFixed(2),
+        upload: ulMbps.toFixed(2)
+    };
+}
+return await runTest();
+"""
 
 def create_chart(df, column, color):
     fig = go.Figure()
     fig.add_trace(go.Scatter(
-        x=df['Timestamp'],
-        y=df[column],
+        x=df['Timestamp'], y=df[column],
         mode='lines+markers',
         line=dict(color=color, width=3),
-        marker=dict(size=8, color='#ffffff', line=dict(color=color, width=2)),
         fill='tozeroy',
-        fillcolor=f'rgba{tuple(list(int(color.lstrip("#")[i:i+2], 16) for i in (0, 2, 4)) + [0.2])}'
+        fillcolor=f'rgba{tuple(list(int(color.lstrip("#")[i:i+2], 16) for i in (0, 2, 4)) + [0.1])}'
     ))
-    
     fig.update_layout(
-        title=dict(text=f"{column} History", font=dict(size=20, color='#ffffff')),
+        title=dict(text=f"{column}", font=dict(color='white')),
         paper_bgcolor='rgba(0,0,0,0)',
         plot_bgcolor='rgba(0,0,0,0)',
-        margin=dict(l=20, r=20, t=40, b=20),
-        xaxis=dict(showgrid=False, color='#888888'),
-        yaxis=dict(showgrid=True, gridcolor='rgba(255,255,255,0.1)', color='#888888'),
-        hovermode='x unified'
+        xaxis=dict(showgrid=False, color='gray'),
+        yaxis=dict(showgrid=True, gridcolor='rgba(255,255,255,0.05)', color='gray'),
+        margin=dict(l=0, r=0, t=30, b=0),
+        height=300
     )
     return fig
 
-# UI Layout
-st.title("🚀 Consistent Speedtest")
-st.markdown("Measure your internet performance with precision and track consistency over time.")
+# UI Body
+st.title("🚀 Device Speed Monitor")
+st.info("This app tests the connection of your **current device** (browser), not the server.")
 
-col1, col2, col3, col4 = st.columns(4)
+if not st.session_state.running:
+    if st.button("▶ START TEST", use_container_width=True):
+        st.session_state.running = True
+        st.session_state.start_time = datetime.now()
+        st.rerun()
+else:
+    if st.button("⏹ STOP TEST", use_container_width=True):
+        st.session_state.running = False
+        st.rerun()
 
-if st.button("▶ Run Speedtest", use_container_width=True):
-    run_speedtest()
+# Execution Loop
+if st.session_state.running:
+    # Check for duration timeout
+    elapsed = (datetime.now() - st.session_state.start_time).total_seconds() / 60
+    if test_mode == "Continuous Monitoring" and elapsed >= duration_min:
+        st.session_state.running = False
+        st.success(f"Continuous monitoring completed ({duration_min} minutes).")
+        st.rerun()
 
-# Display current results if history exists
+    # Trigger JS Test
+    with st.spinner("Testing..."):
+        result = st_javascript(JS_CODE)
+    
+    if result and isinstance(result, dict):
+        new_row = {
+            'Timestamp': datetime.now().strftime("%H:%M:%S"),
+            'Ping (ms)': float(result['ping']),
+            'Jitter (ms)': float(result['jitter']),
+            'Download (Mbps)': float(result['download']),
+            'Upload (Mbps)': float(result['upload'])
+        }
+        st.session_state.history = pd.concat([st.session_state.history, pd.DataFrame([new_row])], ignore_index=True)
+        
+        # If Single Test, stop here
+        if test_mode == "Single Speed Test":
+            st.session_state.running = False
+            st.rerun()
+        else:
+            # For continuous, wait for frequency and rerun
+            time.sleep(frequency_sec)
+            st.rerun()
+
+# Metrics Display
 if not st.session_state.history.empty:
     latest = st.session_state.history.iloc[-1]
-    
-    col1.metric("Ping", f"{latest['Ping (ms)']} ms")
-    col2.metric("Jitter", f"{latest['Jitter (ms)']} ms")
-    col3.metric("Download", f"{latest['Download (Mbps)']} Mbps")
-    col4.metric("Upload", f"{latest['Upload (Mbps)']} Mbps")
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Ping", f"{latest['Ping (ms)']} ms")
+    m2.metric("Jitter", f"{latest['Jitter (ms)']} ms")
+    m3.metric("Download", f"{latest['Download (Mbps)']} Mbps")
+    m4.metric("Upload", f"{latest['Upload (Mbps)']} Mbps")
 
     st.divider()
 
-    chart_col1, chart_col2 = st.columns(2)
-    chart_col3, chart_col4 = st.columns(2)
+    c1, c2 = st.columns(2)
+    c3, c4 = st.columns(2)
+    with c1: st.plotly_chart(create_chart(st.session_state.history, 'Ping (ms)', '#00BFFF'), use_container_width=True)
+    with c2: st.plotly_chart(create_chart(st.session_state.history, 'Jitter (ms)', '#FF7F50'), use_container_width=True)
+    with c3: st.plotly_chart(create_chart(st.session_state.history, 'Download (Mbps)', '#00FFCC'), use_container_width=True)
+    with c4: st.plotly_chart(create_chart(st.session_state.history, 'Upload (Mbps)', '#FF69B4'), use_container_width=True)
 
-    with chart_col1:
-        st.plotly_chart(create_chart(st.session_state.history, 'Ping (ms)', '#00BFFF'), use_container_width=True)
-    
-    with chart_col2:
-        st.plotly_chart(create_chart(st.session_state.history, 'Jitter (ms)', '#FF7F50'), use_container_width=True)
-    
-    with chart_col3:
-        st.plotly_chart(create_chart(st.session_state.history, 'Download (Mbps)', '#00FFCC'), use_container_width=True)
-    
-    with chart_col4:
-        st.plotly_chart(create_chart(st.session_state.history, 'Upload (Mbps)', '#FF69B4'), use_container_width=True)
-
-    # Historical Data Table
-    with st.expander("📊 View Detailed History"):
+    with st.expander("📋 Data Log"):
         st.dataframe(st.session_state.history.sort_index(ascending=False), use_container_width=True)
-        
-        if st.button("🗑 Clear History"):
+        if st.button("🗑 Reset"):
             st.session_state.history = pd.DataFrame(columns=['Timestamp', 'Ping (ms)', 'Jitter (ms)', 'Download (Mbps)', 'Upload (Mbps)'])
             st.rerun()
-
 else:
-    st.info("Click 'Run Speedtest' to start measuring your connection.")
-    
-# Footer
-st.markdown("---")
-st.markdown("Built with ❤️ using Streamlit, Plotly, and Speedtest-cli")
+    st.write("Press Start to begin measuring your device's connection quality.")
+
+st.sidebar.markdown("---")
+st.sidebar.info("Continuous mode will record data points every few seconds to visualize connection stability.")

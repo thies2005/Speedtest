@@ -5,10 +5,10 @@ A premium network speed test application built with Streamlit and Plotly. It mea
 ![Sample Screenshot](https://raw.githubusercontent.com/streamlit/docs/main/public/images/streamlit-logo-secondary-colormark-darktext.png) *Note: You can add your own screenshot here.*
 
 ## Features
-- **Real-time measurement**: Ping, Jitter, Download, and Upload speeds.
-- **Consistency Tracking**: Historical charts for all 4 metrics.
-- **Premium UI**: Sleek dark mode design with interactive Plotly charts.
-- **Detailed History**: Expandable table view of all previous tests.
+- **Client-Side Testing**: Measures the speed of the user's phone or laptop, not the server.
+- **Continuous Monitoring**: Range from 1 minute to 1 hour with adjustable frequency.
+- **Real-time Monitoring**: 4 Interactive charts (Ping, Jitter, Download, Upload).
+- **Premium UI**: Responsive dark mode design.
 
 ## Local Installation
 1. Clone the repository:

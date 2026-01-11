@@ -1,5 +1,6 @@
 streamlit
-speedtest-cli
 plotly
 pandas
 numpy
+streamlit-javascript
+streamlit-js-eval
