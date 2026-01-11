@@ -1,0 +1,16 @@
+# Python ignore
+__pycache__/
+*.py[cod]
+*$py.class
+.env
+.venv
+env/
+venv/
+ENV/
+
+# Streamlit ignore
+.streamlit/
+
+# OS ignore
+.DS_Store
+Thumbs.db
